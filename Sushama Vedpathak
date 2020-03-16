@@ -1,0 +1,238 @@
+Human Activity Recognition 
+PERSON DETECTION CODE
+from __future__ import division, print_function, absolute_import
+import os
+from timeit import time
+import warnings
+import sys
+import cv2
+import numpy as np
+from PIL import Image
+from yolo import YOLO
+from deep_sort import preprocessing
+from deep_sort import nn_matching
+from deep_sort.detection import Detection
+from deep_sort.tracker import Tracker
+from tools import generate_detections as gdet
+from deep_sort.detection import Detection as ddet
+warnings.filterwarnings('ignore')
+def main(yolo):
+   # Definition of the parameters
+    max_cosine_distance = 0.3
+    nn_budget = None
+    nms_max_overlap = 1.0
+   # deep_sort 
+    model_filename = 'model_data/mars-small128.pb'
+    encoder = gdet.create_box_encoder(model_filename,batch_size=1)
+    metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance, nn_budget)
+    tracker = Tracker(metric)
+    writeVideo_flag = False
+    path=r"C:\Users\admin\Videos\Project video\Sitting Videos\Video_20200208084629370_by_videoshow.mp4"
+    video_capture = cv2.VideoCapture(path)
+    if writeVideo_flag:
+    # Define the codec and create VideoWriter object
+        w = int(video_capture.get(3))
+        h = int(video_capture.get(4))
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        out = cv2.VideoWriter('output.avi', fourcc, 15, (w, h))
+        list_file = open('detection.txt', 'w')
+        frame_index = -1 
+    fps = 0.0
+    #folder=os.path.splitext(os.path.basename(path))[0]
+    folder=r"C:\Users\admin\Desktop\Main data\Sitting\Pranali"
+    os.makedirs(folder,exist_ok=True)
+    counter=0
+    frame_no=0
+    d=0
+    while True:
+        ret, frame = video_capture.read() # frame shape 640*480*3
+        video_capture.set(1,frame_no)
+        if ret != True:
+            break
+        t1 = time.time()
+       # image = Image.fromarray(frame)
+        image = Image.fromarray(frame[...,::-1]) #bgr to rgb
+        boxs = yolo.detect_image(image)
+       # print("box_num",len(boxs))
+        features = encoder(frame,boxs)
+        # score to 1.0 here).
+        detections = [Detection(bbox, 1.0, feature) for bbox, feature in zip(boxs, features)]
+        # Run non-maxima suppression.
+        boxes = np.array([d.tlwh for d in detections])
+        scores = np.array([d.confidence for d in detections])
+        indices = preprocessing.non_max_suppression(boxes, nms_max_overlap, scores)
+        detections = [detections[i] for i in indices]
+        # Call the tracker
+        tracker.predict()
+        tracker.update(detections)
+        for track in tracker.tracks:
+            if not track.is_confirmed() or track.time_since_update > 1:
+                continue 
+            bbox = track.to_tlbr()
+            cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])),(255,255,255), 2)
+            cv2.putText(frame, 'person',(int(bbox[0]), int(bbox[1])),0, 5e-3 * 200, (0,255,0),2)
+
+        for det in detections:
+            bbox = det.to_tlbr()
+            img=frame[int(bbox[1]):int(bbox[3]),int(bbox[0]):int(bbox[2])]
+            counter+=1
+            print(counter)
+            img=cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+            cv2.imwrite('{}/{}.jpg'.format(folder,counter),img)
+            cv2.rectangle(frame,(int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])),(255,0,0), 2)
+            cv2.imshow('', frame)
+        if writeVideo_flag:
+            # save a frame
+            out.write(frame)
+            frame_index = frame_index + 1
+            list_file.write(str(frame_index)+' ')
+            if len(boxs) != 0:
+                for i in range(0,len(boxs)):
+                    list_file.write(str(boxs[i][0]) + ' '+str(boxs[i][1]) + ' '+str(boxs[i][2]) + ' '+str(boxs[i][3]) + ' ')
+            list_file.write('\n')
+        fps  = ( fps + (1./(time.time()-t1)) ) / 2
+        print("fps= %f"%(fps))
+        frame_no+=5
+        d+=1
+        # Press Q to stop!
+        if (cv2.waitKey(1) & 0xFF == ord('q')) or d==70:
+            break
+    video_capture.release()
+    if writeVideo_flag:
+        out.release()
+        list_file.close()
+    cv2.destroyAllWindows()
+if __name__ == '__main__':
+    main(YOLO())
+
+SUB FOLDER IMAGES SAVE IN ONE SPECIFIED FOLDER CODE
+import shutil
+import os
+current_path=r"C:\Users\admin\Pictures\Person detection Images\Sitting"
+save_folder="Sitting images"
+os.makedirs(save_folder,exist_ok=True)
+i=0
+for folder in os.listdir(current_path):
+    folder_path=os.path.join(current_path,folder)
+    for image in os.listdir(folder_path):
+        save_image=os.path.join(save_folder,'{}.jpg'.format(i))
+        i+=1
+        shutil.copy(os.path.join(folder_path,image),save_image)
+    print(folder_path,"Done")
+
+SPLIT FOLDER CODE
+import tensorflow as tf
+pip install split_folders
+import split_folders
+split_folders.ratio(r"C:\Users\admin\Desktop\HAR data","save_folders",seed=3403,ratio=(.8,.2))
+
+CNN CLASSIFIER CODE
+##Training code
+import numpy as np         # dealing with arrays
+import os                  # dealing with directories
+from random import shuffle # mixing up or currently ordered data that might lead our network astray in training.
+import glob
+import cv2
+path = r"C:\Users\admin\Desktop\HAR data"
+IMG_SIZE = 64
+LR = 1e-3
+MODEL_NAME = 'activity_dectector-{}-{}.model'.format(LR, '5conv-basic')
+no_of_activity=2
+percentage=0.3
+no_of_images=70
+def create_train_data(path):
+    training_data = []
+    folders=os.listdir(path)[0:no_of_activity]
+    for i in range(len(folders)):
+        label = [0 for i in range(no_of_activity)]
+        label[i] = 1
+        print(folders[i])
+        k=0
+        for j in glob.glob(path+"\\"+folders[i]+"\\*.jpg"):            
+          #  if(k==no_of_images):
+            #    break
+            try:
+                img = cv2.imread(j)
+                #print(j)
+                img = cv2.resize(img, (IMG_SIZE,IMG_SIZE))
+                training_data.append([np.array(img),np.array(label)])
+                k=k+1
+            except:
+                print(j)
+                pass
+        print(k)
+np.save('training_{}_{}_{}.npz'.format(no_of_activity,no_of_images,IMG_SIZE),training_data)
+    shuffle(training_data)
+    return training_data,folders
+import tflearn
+from tflearn.layers.conv import conv_2d, max_pool_2d
+from tflearn.layers.core import input_data, dropout, fully_connected
+from tflearn.layers.estimator import regression
+#model building
+import tensorflow as tf
+tf.reset_default_graph()
+convnet = input_data(shape=[None, IMG_SIZE, IMG_SIZE, 3], name='input')
+convnet = conv_2d(convnet, 32, 5, activation='relu')
+convnet = max_pool_2d(convnet, 5)
+convnet = conv_2d(convnet, 64, 5, activation='relu')
+convnet = max_pool_2d(convnet, 5)
+convnet = conv_2d(convnet, 128, 5, activation='relu')
+convnet = max_pool_2d(convnet, 5)
+convnet = conv_2d(convnet, 64, 5, activation='relu')
+convnet = max_pool_2d(convnet, 5)
+convnet = conv_2d(convnet, 32, 5, activation='relu')
+convnet = max_pool_2d(convnet, 5)
+convnet = fully_connected(convnet, 1024, activation='relu')
+convnet = dropout(convnet, 0.6)
+convnet = fully_connected(convnet, 2, activation='softmax')
+convnet = regression(convnet, optimizer='adam', learning_rate=LR, loss='categorical_crossentropy', name='targets')
+model = tflearn.DNN(convnet, tensorboard_dir='log')
+#data loading
+training_data,labels=create_train_data(path)
+#training_data=np.load('training_{}_{}_{}.npz'.format(no_of_activity,no_of_images,IMG_SIZE))
+a=int(len(training_data)*percentage)
+train = training_data[:-a]
+test=training_data[-a:]
+X=[i[0] for i in train]
+Y = [i[1] for i in train]
+test_x = np.array([i[0] for i in test]).reshape(-1,IMG_SIZE,IMG_SIZE,3)
+test_x.shape
+test_y = [i[1] for i in test]
+model.fit({'input': X}, {'targets': Y}, n_epoch=10, validation_set=({'input': test_x}, {'targets': test_y}), 
+    snapshot_step=500, show_metric=True, run_id=MODEL_NAME)
+model.save(MODEL_NAME)
+##Testing code
+import cv2
+img=cv2.imread(r"C:\Users\admin\Desktop\Sonal\pictures\FB_IMG_1530035919359.jpg")
+img1=cv2.resize(img,(IMG_SIZE,IMG_SIZE))
+model_out=model.predict([img1])
+result=np.argmax(model_out)
+name=labels[result]
+print(name)
+
+HISTOGRAM EQUALIZATION
+import cv2
+import numpy as np
+from matplotlib import pyplot as plt
+img = cv2.imread(r"C:\Users\admin\Desktop\Sonal\akshu0.jpg",255)
+hist,bins = np.histogram(img.flatten(),256,[0,256])
+cdf = hist.cumsum()
+cdf_normalized = cdf * hist.max()/ cdf.max()
+plt.plot(cdf_normalized, color = 'b')
+plt.hist(img.flatten(),256,[0,256], color = 'r')
+plt.xlim([0,256])
+plt.legend(('cdf','histogram'), loc = 'upper left')
+plt.show()
+import numpy as np
+cdf_m = np.ma.masked_equal(cdf,0)
+cdf_m = (cdf_m - cdf_m.min())*255/(cdf_m.max()-cdf_m.min())
+cdf = np.ma.filled(cdf_m,0).astype('uint8')
+img2 = cdf[img]
+import cv2
+import numpy as np
+img = cv2.imread(r"C:\Users\admin\Desktop\Sonal\akshu0.jpg",255)
+equ = cv2.equalizeHist(img)
+run = np.hstack((img,equ)) #stacking images side-by-side
+cv2.imwrite('run.png',run)
+
+
